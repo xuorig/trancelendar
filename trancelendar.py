@@ -1,12 +1,15 @@
 import urllib2
 from bs4 import BeautifulSoup
-from dateutil import parser
-
+from dateutil import parser as dateparser
+import datetime
+import json
 
 import argparse
 import httplib2
 import os
 import sys
+from pytz import timezone
+import pytz
 
 from apiclient import discovery
 from oauth2client import file
@@ -14,7 +17,7 @@ from oauth2client import client
 from oauth2client import tools
 
 #Google APIS Stuff
-CLIENT_SECRETS = os.path.join(os.path.dirname(__file__), 'client_secrets.json')
+CLIENT_SECRETS = os.path.join(os.path.dirname(__file__), 'client_secrets_test.json')
 
 FLOW = client.flow_from_clientsecrets(CLIENT_SECRETS,
   scope=[
@@ -31,11 +34,21 @@ parser = argparse.ArgumentParser(
     parents=[tools.argparser])
 
 EDMCANADA_URL = 'http://www.edmcanada.com/montreal/'
+CALENDAR_NAME = 'trance-calendar'
+TIMEZONE = 'US/Eastern'
 
 
 def get_date_from_string(text):
+    my_time_zone = timezone(TIMEZONE)
     text = ' '.join(text.replace(',','').split(' ')[0:3])
-    return parser.parse(text)
+    date_time = dateparser.parse(text)
+    date_time += datetime.timedelta(hours=10)
+    my_time_zone.localize(date_time)
+    return date_time
+
+def datetime2json(date):
+    dthandler = lambda obj: obj.isoformat() if isinstance(obj, datetime.datetime)  or isinstance(obj, datetime.date) else None
+    return json.dumps(date, default=dthandler)
 
 def get_event_strings():
 
@@ -70,24 +83,51 @@ def main(argv):
     service = discovery.build('calendar', 'v3', http=http)
 
     try:
-        print "Success! Now add code here."
-        calendar = service.calendars().get(calendarId=found_id).execute()
-        import pdb; pdb.set_trace()
         #Check if trance calendar already exists. If it does, delete it and create a new one.
 
-
+        calendar_list = service.calendarList().list().execute()
+        for calendar_list_entry in calendar_list['items']:
+            if calendar_list_entry['summary'] == CALENDAR_NAME:
+                service.calendarList().delete(calendarId=calendar_list_entry['id']).execute()
 
         #Create the calendar
         calendar = {
-            'summary': 'trance-calendar',
+            'summary': CALENDAR_NAME,
             'timeZone': 'America/Montreal'
         }
 
         created_calendar = service.calendars().insert(body=calendar).execute()
-        print('created calendar id:%s',created_calendar['id'])
+        print('created calendar id:%s' % (created_calendar['id'],))
 
         #Now we add all the found events in the calendar!
         event_strings = get_event_strings()
+
+        for event in event_strings:
+            date = get_date_from_string(event)
+            end_date = date + datetime.timedelta(hours=4)
+            end_date = end_date.isoformat()
+            date = date.isoformat()
+
+            title = event.split('-')[1]
+
+            event = {
+                     'summary': title,
+                     'location': 'Somewhere',
+                     'start': {
+                               'dateTime': date,
+                               'timeZone': TIMEZONE
+                               },
+                     'end': {
+                             'dateTime': end_date,
+                             'timeZone': TIMEZONE
+                             },
+            }
+
+            created_event = service.events().insert(calendarId=created_calendar['id'], body=event).execute()
+            print('Created event id: %s' % (created_event['id'],))
+
+
+         print('DONE. Visit https://www.google.com/calendar/render')
 
 
     except client.AccessTokenRefreshError:
